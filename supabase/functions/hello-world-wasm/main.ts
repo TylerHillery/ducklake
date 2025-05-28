@@ -15,7 +15,13 @@ async function getDuckDBData() {
   );
 
   // Instantiate the asynchronous version of DuckDB-wasm
-  const worker = new Worker(worker_url);
+  let worker: Worker;
+  try {
+    worker = new Worker(worker_url);
+  } catch (error) {
+    console.error("Failed to create DuckDB worker", { worker_url, error });
+    throw error;
+  }
   const logger = new duckdb.ConsoleLogger();
   const db = new duckdb.AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
