@@ -1,3 +1,5 @@
 .venv
 .env
+.env.aws
+.env.backup
 *.db
