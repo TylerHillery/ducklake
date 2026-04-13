@@ -65,9 +65,28 @@ MACHINE_SPECS = {
 }
 
 FIELDNAMES = [
-    "benchmark_id", "timestamp", "instance_size", "vcpus", "memory_gb",
+    "benchmark_id", "timestamp", "provider", "instance_size", "vcpus", "memory_gb",
     "table_name", "query_number", "run_number", "time_seconds", "query_text",
 ]
+
+# Provider groupings for filtering in charts
+PROVIDER = {
+    "pg_clickhouse":                "pg_clickhouse",
+    "pg_duckdb-motherduck":         "pg_duckdb",
+    "pg_duckdb-parquet":            "pg_duckdb",
+    "pg_duckdb-indexed":            "pg_duckdb",
+    "pg_duckdb":                    "pg_duckdb",
+    "pg_ducklake":                  "pg_ducklake",
+    "hydra":                        "hydra",
+    "crunchy-bridge-for-analytics": "crunchy_bridge",
+    "timescaledb":                  "timescale",
+    "timescale-cloud":              "timescale",
+    "timescaledb-no-columnstore":   "timescale",
+    "citus":                        "citus",
+    "supabase":                     "supabase",
+    "postgresql":                   "postgresql",
+    "postgresql-orioledb":          "postgresql",
+}
 
 
 def convert():
@@ -88,12 +107,14 @@ def convert():
 
         benchmark_id = f"{system} ({machine})"
         specs = MACHINE_SPECS.get(machine, (0, 0))
+        provider = PROVIDER.get(dirname, dirname)
 
         for query_num, timings in enumerate(result):
             for run_num, time_s in enumerate(timings, 1):
                 rows.append({
                     "benchmark_id": benchmark_id,
                     "timestamp": date,
+                    "provider": provider,
                     "instance_size": machine,
                     "vcpus": specs[0],
                     "memory_gb": specs[1],

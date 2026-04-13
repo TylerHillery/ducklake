@@ -44,7 +44,7 @@ uv run main.py
 
 # ClickBench — seed, benchmark, maintain
 uv run clickbench/seed.py          # zero-copy load of hits.parquet → DuckLake
-uv run clickbench/benchmark.py --instance small --table hits_13gb
+uv run clickbench/benchmark.py --instance small --table hits_14gb
 ```
 
 See [`python/clickbench/README.md`](python/clickbench/README.md) for the full ClickBench workflow including partitioning, sorting, replication, and maintenance.

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""One-off: rename clickbench.main.hits → hits_13gb"""
+"""One-off: rename clickbench.main.hits_13gb → hits_14gb"""
 
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 import duckdb
 
-load_dotenv(Path(__file__).parent.parent / ".env.staging")
+load_dotenv(Path(__file__).parent.parent.parent / ".env.staging")
 
 PG = (
     f"ducklake:postgres:host={os.environ['POSTGRES_HOST']} port={os.environ['POSTGRES_PORT']} "
@@ -31,5 +31,5 @@ with duckdb.connect() as conn:
             METADATA_SCHEMA 'clickbench_ducklake'
         )
     """)
-    conn.execute("ALTER TABLE clickbench.main.hits RENAME TO hits_13gb")
-    print("Done: clickbench.main.hits → clickbench.main.hits_13gb")
+    conn.execute("ALTER TABLE clickbench.main.hits_13gb RENAME TO hits_14gb")
+    print("Done: clickbench.main.hits_13gb → clickbench.main.hits_14gb")

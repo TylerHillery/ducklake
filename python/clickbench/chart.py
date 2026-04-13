@@ -23,9 +23,15 @@ SCRIPT_DIR = Path(__file__).parent
 DEFAULT_CSV = SCRIPT_DIR / "results" / "clickbench_results.csv"
 
 
-def load(csv_path: Path, run: str) -> pd.DataFrame:
+def load(csv_path: Path, run: str, providers: list[str] | None = None) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     df["time_seconds"] = pd.to_numeric(df["time_seconds"], errors="coerce")
+
+    if providers:
+        if "provider" not in df.columns:
+            print("Warning: CSV has no 'provider' column — re-run convert_clickbench.py and benchmark.py")
+        else:
+            df = df[df["provider"].isin(providers)]
 
     if run == "hot":
         # Run 3 = hottest
@@ -191,20 +197,114 @@ def bar_charts(df: pd.DataFrame, top_n: int | None) -> alt.Chart:
     return alt.vconcat(*charts).resolve_scale(color="shared")
 
 
+def speedup_chart(df: pd.DataFrame, bid1: str, bid2: str) -> alt.Chart:
+    """
+    Head-to-head diverging bar chart.
+
+    X axis: log₂(time_bid2 / time_bid1)
+      > 0  → bid1 is faster (bar goes right, green)
+      < 0  → bid2 is faster (bar goes left, red)
+      ticks labeled as ×2, ×4, ×8 … on each side
+
+    Y axis: query number, sorted Q0–Q42.
+    """
+    import numpy as np
+
+    d1 = (
+        df[df["benchmark_id"] == bid1][["query_number", "time_seconds"]]
+        .rename(columns={"time_seconds": "t1"})
+    )
+    d2 = (
+        df[df["benchmark_id"] == bid2][["query_number", "time_seconds"]]
+        .rename(columns={"time_seconds": "t2"})
+    )
+    merged = d1.merge(d2, on="query_number").dropna(subset=["t1", "t2"])
+    merged = merged[merged["t1"] > 0]
+
+    merged["log2_speedup"] = np.log2(merged["t2"] / merged["t1"])
+    merged["ratio"] = merged["t2"] / merged["t1"]
+    merged["label"] = merged["ratio"].apply(
+        lambda r: f"{r:.2f}× faster" if r >= 1 else f"{1/r:.2f}× faster"
+    )
+    merged["faster"] = merged["log2_speedup"].apply(
+        lambda x: bid1 if x > 0 else (bid2 if x < 0 else "equal")
+    )
+    merged["q_num"] = merged["query_number"].str.replace("Q", "").astype(int)
+    query_order = [f"Q{i}" for i in sorted(merged["q_num"].unique())]
+
+    tick_expr = (
+        "datum.value == 0 ? '1×' : "
+        "datum.value > 0 ? format(pow(2, datum.value), '.2~r') + '×' : "
+        "'-' + format(pow(2, -datum.value), '.2~r') + '×'"
+    )
+
+    bars = (
+        alt.Chart(merged)
+        .mark_bar()
+        .encode(
+            x=alt.X(
+                "log2_speedup:Q",
+                title=f"← {bid2} faster  |  {bid1} faster →",
+                axis=alt.Axis(labelExpr=tick_expr, grid=True),
+            ),
+            y=alt.Y("query_number:N", sort=query_order, title="Query",
+                    axis=alt.Axis(labelFontSize=9)),
+            color=alt.condition(
+                alt.datum.log2_speedup >= 0,
+                alt.value("#22c55e"),
+                alt.value("#ef4444"),
+            ),
+            tooltip=[
+                alt.Tooltip("query_number:N", title="Query"),
+                alt.Tooltip("t1:Q", title=f"{bid1} (s)", format=".3f"),
+                alt.Tooltip("t2:Q", title=f"{bid2} (s)", format=".3f"),
+                alt.Tooltip("label:N", title="Speedup"),
+                alt.Tooltip("faster:N", title="Faster system"),
+            ],
+        )
+        .properties(
+            width=600,
+            height=max(len(query_order) * 14, 400),
+            title=f"{bid1}  vs  {bid2}",
+        )
+    )
+
+    rule = (
+        alt.Chart(pd.DataFrame({"x": [0]}))
+        .mark_rule(color="black", strokeWidth=1)
+        .encode(x=alt.X("x:Q"))
+    )
+
+    return (bars + rule).configure_axis(labelFontSize=10)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate ClickBench comparison charts")
     parser.add_argument("--csv", default=str(DEFAULT_CSV), help="Path to CSV results file")
     parser.add_argument("--run", default="hot", choices=["hot", "cold", "all"], help="Which run to plot (default: hot)")
     parser.add_argument("--top", type=int, default=None, help="Show only top N fastest systems")
+    parser.add_argument("--provider", nargs="+", default=None, metavar="PROVIDER",
+                        help="Filter to one or more providers (e.g. --provider supabase_ducklake pg_duckdb)")
+    parser.add_argument("--compare", nargs=2, metavar="BENCHMARK_ID",
+                        help="Head-to-head speedup chart for two benchmark IDs")
     parser.add_argument("--output", default=str(SCRIPT_DIR / "results"), help="Output directory")
     args = parser.parse_args()
 
-    df = load(Path(args.csv), args.run)
+    df = load(Path(args.csv), args.run, args.provider)
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Loaded {len(df)} rows, {df['benchmark_id'].nunique()} systems, {df['query_number'].nunique()} queries")
     print(f"Run: {args.run}, Top: {args.top or 'all'}")
+
+    if args.compare:
+        bid1, bid2 = args.compare
+        print(f"Generating head-to-head: {bid1}  vs  {bid2}…")
+        c = speedup_chart(df, bid1, bid2)
+        out = out_dir / f"headtohead_{args.run}.html"
+        c.save(str(out))
+        print(f"  → {out}")
+        return
 
     # Heatmap
     print("Generating heatmap…")

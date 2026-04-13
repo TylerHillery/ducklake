@@ -54,13 +54,15 @@ DUCKLAKE_DATA_PATH = f"s3://{BUCKET_NAME}/clickbench/ducklake/"
 DUCKLAKE_ALIAS = "clickbench"
 METADATA_SCHEMA = "clickbench_ducklake"
 LOCAL_PARQUET = Path(__file__).parent / "hits.parquet"
-BASE_SIZE_GB = 13
-BASE_TABLE = "hits_13gb"
+BASE_SIZE_GB = 14
+BASE_TABLE = "hits_14gb"
 
 console = Console()
 
 
-def _table_name(replicate: int = 1, partitioned: str | None = None, sorted: str | None = None) -> str:
+def _table_name(
+    replicate: int = 1, partitioned: str | None = None, sorted: str | None = None
+) -> str:
     size_gb = BASE_SIZE_GB * replicate
     name = f"hits_{size_gb}gb"
     if partitioned:
@@ -73,6 +75,7 @@ def _table_name(replicate: int = 1, partitioned: str | None = None, sorted: str 
 # ---------------------------------------------------------------------------
 # S3 helpers
 # ---------------------------------------------------------------------------
+
 
 def _s3_client():
     return boto3.client(
@@ -127,7 +130,13 @@ def upload_parquet(s3) -> None:
         multipart_threshold=100 * 1024 * 1024,
         multipart_chunksize=100 * 1024 * 1024,
     )
-    with tqdm(total=file_size, unit="B", unit_scale=True, unit_divisor=1024, desc="  uploading") as bar:
+    with tqdm(
+        total=file_size,
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1024,
+        desc="  uploading",
+    ) as bar:
         s3.upload_file(
             str(LOCAL_PARQUET),
             BUCKET_NAME,
@@ -141,6 +150,7 @@ def upload_parquet(s3) -> None:
 # ---------------------------------------------------------------------------
 # FDW setup via DuckDB postgres extension
 # ---------------------------------------------------------------------------
+
 
 def setup_fdw() -> None:
     console.print("Setting up pg_duckdb foreign server + user mappings…")
@@ -229,7 +239,7 @@ def _attach_ducklake(conn: duckdb.DuckDBPyConnection) -> None:
 
 
 def _ensure_base_table(conn: duckdb.DuckDBPyConnection) -> None:
-    """Make sure hits_13gb exists (zero-copy: registers parquet without copying data)."""
+    """Make sure hits_14gb exists (zero-copy: registers parquet without copying data)."""
     fq = f"{DUCKLAKE_ALIAS}.main.{BASE_TABLE}"
     try:
         row_count = conn.execute(f"SELECT COUNT(*) FROM {fq}").fetchone()[0]
@@ -240,23 +250,15 @@ def _ensure_base_table(conn: duckdb.DuckDBPyConnection) -> None:
     except Exception:
         pass
 
-    if LOCAL_PARQUET.exists():
-        read_path = str(LOCAL_PARQUET)
-        console.print(f"[dim]Source:[/dim] local {LOCAL_PARQUET.name}")
-    else:
-        read_path = S3_RAW_PATH
-        console.print(f"[dim]Source:[/dim] {S3_RAW_PATH} (local hits.parquet not found)")
-
-    console.print(f"Creating {fq} (zero-copy)…")
-    # Create an empty table with the schema inferred directly from the parquet file.
-    # hits.parquet has no DuckLake field IDs, so DuckLake will use name mapping.
+    console.print(f"Creating {fq} (zero-copy from {S3_RAW_PATH})…")
+    # Both schema inference and file registration use the S3 path so that
+    # pg_duckdb on the remote Postgres server can read the data.
     conn.execute(
         f"CREATE TABLE IF NOT EXISTS {fq} AS "
-        f"SELECT * FROM read_parquet({read_path!r}, binary_as_string => true) WHERE 1=0"
+        f"SELECT * FROM read_parquet({S3_RAW_PATH!r}, binary_as_string => true) WHERE 1=0"
     )
-    # Register the parquet file in-place — no data is copied.
     conn.execute(
-        f"CALL ducklake_add_data_files('{DUCKLAKE_ALIAS}', '{BASE_TABLE}', {read_path!r})"
+        f"CALL ducklake_add_data_files('{DUCKLAKE_ALIAS}', '{BASE_TABLE}', {S3_RAW_PATH!r})"
     )
     console.print(f"[green]✓[/green] {fq} ready (zero-copy)")
 
@@ -266,7 +268,7 @@ def create_ducklake_table(
     partitioned: str | None = None,
     sorted: str | None = None,
 ) -> None:
-    """Create a DuckLake table variant from the base hits_13gb table."""
+    """Create a DuckLake table variant from the base hits_14gb table."""
     table = _table_name(replicate, partitioned, sorted)
     fq = f"{DUCKLAKE_ALIAS}.main.{table}"
     base_fq = f"{DUCKLAKE_ALIAS}.main.{BASE_TABLE}"
@@ -283,9 +285,13 @@ def create_ducklake_table(
         try:
             row_count = conn.execute(f"SELECT COUNT(*) FROM {fq}").fetchone()[0]
             if row_count > 0:
-                console.print(f"[dim]Table {fq} already has {row_count:,} rows — skipping.[/dim]")
+                console.print(
+                    f"[dim]Table {fq} already has {row_count:,} rows — skipping.[/dim]"
+                )
                 return
-            console.print(f"[yellow]Table {fq} exists but is empty — dropping and re-creating.[/yellow]")
+            console.print(
+                f"[yellow]Table {fq} exists but is empty — dropping and re-creating.[/yellow]"
+            )
             conn.execute(f"DROP TABLE {fq}")
         except Exception:
             pass
@@ -317,6 +323,7 @@ def create_ducklake_table(
 # ---------------------------------------------------------------------------
 # Maintenance
 # ---------------------------------------------------------------------------
+
 
 def maintenance(
     replicate: int = 1,
@@ -373,7 +380,9 @@ def maintenance(
                 maint_note,
             )
 
-        results = Table(box=box.SIMPLE_HEAVY, show_header=True, header_style="bold cyan")
+        results = Table(
+            box=box.SIMPLE_HEAVY, show_header=True, header_style="bold cyan"
+        )
         results.add_column("Step", style="bold white", no_wrap=True)
         results.add_column("Rows", justify="right", style="green")
         results.add_column("Scan", justify="right", style="yellow")
@@ -390,35 +399,49 @@ def maintenance(
         # tier 0→1: merge tiny files (<1 MB) into ~5 MB
         conn.execute(f"CALL ducklake_set_option('{alias}', 'target_file_size', '5MB')")
         t0 = time.perf_counter()
-        conn.execute(f"CALL ducklake_merge_adjacent_files('{alias}', max_file_size => 1048576)")
+        conn.execute(
+            f"CALL ducklake_merge_adjacent_files('{alias}', max_file_size => 1048576)"
+        )
         t = time.perf_counter() - t0
         bench("after merge", f"merge_adjacent_files(<1MB->5MB) {t:.3f}s")
 
         # tier 1→2: merge small files (1–10 MB) into ~32 MB
         conn.execute(f"CALL ducklake_set_option('{alias}', 'target_file_size', '32MB')")
         t0 = time.perf_counter()
-        conn.execute(f"CALL ducklake_merge_adjacent_files('{alias}', min_file_size => 1048576, max_file_size => 10485760)")
+        conn.execute(
+            f"CALL ducklake_merge_adjacent_files('{alias}', min_file_size => 1048576, max_file_size => 10485760)"
+        )
         t = time.perf_counter() - t0
         bench("after merge", f"merge_adjacent_files(1MB-10MB->32MB) {t:.3f}s")
 
         # tier 2→3: merge medium files (10–64 MB) into ~128 MB
-        conn.execute(f"CALL ducklake_set_option('{alias}', 'target_file_size', '128MB')")
+        conn.execute(
+            f"CALL ducklake_set_option('{alias}', 'target_file_size', '128MB')"
+        )
         t0 = time.perf_counter()
-        conn.execute(f"CALL ducklake_merge_adjacent_files('{alias}', min_file_size => 10485760, max_file_size => 67108864)")
+        conn.execute(
+            f"CALL ducklake_merge_adjacent_files('{alias}', min_file_size => 10485760, max_file_size => 67108864)"
+        )
         t = time.perf_counter() - t0
         bench("after merge", f"merge_adjacent_files(10MB-64MB->128MB) {t:.3f}s")
 
         # rewrite files with deleted rows
         t0 = time.perf_counter()
-        conn.execute(f"CALL ducklake_rewrite_data_files('{alias}', '{table}', delete_threshold => 0.0)")
+        conn.execute(
+            f"CALL ducklake_rewrite_data_files('{alias}', '{table}', delete_threshold => 0.0)"
+        )
         t = time.perf_counter() - t0
         bench("after rewrite", f"rewrite_data_files(delete_threshold=0.0) {t:.3f}s")
 
         # expire snapshots + cleanup old files + delete orphaned files
         t0 = time.perf_counter()
         conn.execute(f"CALL ducklake_expire_snapshots('{alias}', older_than => now())")
-        conn.execute(f"CALL ducklake_cleanup_old_files('{alias}', older_than => now() - INTERVAL '0 seconds')")
-        conn.execute(f"CALL ducklake_delete_orphaned_files('{alias}', older_than => now() - INTERVAL '0 seconds')")
+        conn.execute(
+            f"CALL ducklake_cleanup_old_files('{alias}', older_than => now() - INTERVAL '0 seconds')"
+        )
+        conn.execute(
+            f"CALL ducklake_delete_orphaned_files('{alias}', older_than => now() - INTERVAL '0 seconds')"
+        )
         t = time.perf_counter() - t0
         bench("after cleanup", f"expire + cleanup + delete_orphaned {t:.3f}s")
 
@@ -430,6 +453,7 @@ def maintenance(
 # ---------------------------------------------------------------------------
 # Teardown
 # ---------------------------------------------------------------------------
+
 
 def teardown() -> None:
     """Delete all DuckLake data files from S3 and drop the metadata schema."""
@@ -453,7 +477,9 @@ def teardown() -> None:
     if total == 0:
         console.print(f"[dim]No objects found under s3://{BUCKET_NAME}/{prefix}[/dim]")
     else:
-        console.print(f"[green]✓[/green] Deleted {total} objects from s3://{BUCKET_NAME}/{prefix}")
+        console.print(
+            f"[green]✓[/green] Deleted {total} objects from s3://{BUCKET_NAME}/{prefix}"
+        )
 
     # 2. Drop the DuckLake metadata schema in Postgres
     pg_conn = (
@@ -475,15 +501,35 @@ def teardown() -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def _add_variant_args(p: argparse.ArgumentParser) -> None:
     """Add --replicate, --partitioned, --sorted to a subparser."""
-    p.add_argument("--replicate", type=int, default=1, help="Number of times to insert base data (default: 1 = ~13GB)")
-    p.add_argument("--partitioned", type=str, default=None, metavar="COLUMN", help="Partition column (e.g. eventdate)")
-    p.add_argument("--sorted", type=str, default=None, metavar="COLUMN", help="Sort column (e.g. counterid)")
+    p.add_argument(
+        "--replicate",
+        type=int,
+        default=1,
+        help="Number of times to insert base data (default: 1 = ~14gb)",
+    )
+    p.add_argument(
+        "--partitioned",
+        type=str,
+        default=None,
+        metavar="COLUMN",
+        help="Partition column (e.g. eventdate)",
+    )
+    p.add_argument(
+        "--sorted",
+        type=str,
+        default=None,
+        metavar="COLUMN",
+        help="Sort column (e.g. counterid)",
+    )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ClickBench seed / maintenance / teardown for DuckLake")
+    parser = argparse.ArgumentParser(
+        description="ClickBench seed / maintenance / teardown for DuckLake"
+    )
     sub = parser.add_subparsers(dest="command")
 
     seed_p = sub.add_parser("seed", help="Seed the base table and/or a variant table")
@@ -519,7 +565,9 @@ def main() -> None:
     ensure_bucket(s3)
 
     if parquet_uploaded(s3):
-        console.print(f"[dim]Parquet already in S3, skipping upload:[/dim] {S3_RAW_PATH}")
+        console.print(
+            f"[dim]Parquet already in S3, skipping upload:[/dim] {S3_RAW_PATH}"
+        )
     else:
         upload_parquet(s3)
 

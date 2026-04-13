@@ -78,6 +78,8 @@ SELECT fdwname, fdwowner::regrole FROM pg_foreign_data_wrapper WHERE fdwname = '
 SELECT * FROM duckdb.extensions WHERE extension_name = 'ducklake';
 ```
 
+Before each benchmark you will also be prompted to set the `duckdb.memory_limit` to 75% of available memory of the instnace used.
+
 ---
 
 ## Step 1 — Fill in credentials
@@ -104,7 +106,7 @@ wget --continue --progress=dot:giga \
 
 ### Base table
 
-Creates `hits_13gb` from the raw parquet file. Uploads to Supabase Storage, sets up FDW + user mappings, and creates the DuckLake table.
+Creates `hits_14gb` from the raw parquet file. Uploads to Supabase Storage, sets up FDW + user mappings, and creates the DuckLake table.
 
 ```bash
 uv run python clickbench/seed.py seed
@@ -112,7 +114,7 @@ uv run python clickbench/seed.py seed
 
 ### Table variants
 
-Create tables with partitioning, sorting, or both. All variants read from the base `hits_13gb` table.
+Create tables with partitioning, sorting, or both. All variants read from the base `hits_14gb` table.
 
 ```bash
 # Partitioned by EventDate
@@ -147,10 +149,10 @@ hits_{size}gb[_partitioned_{column}][_sorted_{column}]
 
 | Flags | Table name |
 |---|---|
-| (none) | `hits_13gb` |
+| (none) | `hits_14gb` |
 | `--replicate 2` | `hits_26gb` |
-| `--partitioned eventdate` | `hits_13gb_partitioned_eventdate` |
-| `--sorted counterid` | `hits_13gb_sorted_counterid` |
+| `--partitioned eventdate` | `hits_14gb_partitioned_eventdate` |
+| `--sorted counterid` | `hits_14gb_sorted_counterid` |
 | `--replicate 4 --partitioned eventdate --sorted counterid` | `hits_52gb_partitioned_eventdate_sorted_counterid` |
 
 The seed is **idempotent** — re-running skips tables that already have data.
@@ -162,11 +164,11 @@ The seed is **idempotent** — re-running skips tables that already have data.
 ### Quick run (JSON output)
 
 ```bash
-# Default: runs against hits_13gb
+# Default: runs against hits_14gb
 cd clickbench && ./benchmark.sh
 
 # Specific table:
-TABLE_NAME=hits_13gb_sorted_counterid ./benchmark.sh
+TABLE_NAME=hits_14gb_sorted_counterid ./benchmark.sh
 ```
 
 Prints results as JSON arrays (one per query), raw output saved to `log.txt`.
@@ -174,8 +176,8 @@ Prints results as JSON arrays (one per query), raw output saved to `log.txt`.
 ### Full run with CSV results
 
 ```bash
-uv run python clickbench/benchmark.py --instance small --table hits_13gb
-uv run python clickbench/benchmark.py --instance small --table hits_13gb_sorted_counterid
+uv run python clickbench/benchmark.py --instance small --table hits_14gb
+uv run python clickbench/benchmark.py --instance small --table hits_14gb_sorted_counterid
 uv run python clickbench/benchmark.py --instance 4xl --table hits_26gb_partitioned_eventdate
 ```
 
@@ -183,16 +185,16 @@ Results are appended to `results/clickbench_results.csv` with columns:
 
 | Column | Example |
 |---|---|
-| `benchmark_id` | `small__hits_13gb_sorted_counterid` |
+| `benchmark_id` | `small__hits_14gb_sorted_counterid` |
 | `timestamp` | `2026-04-10T14:30:00Z` |
 | `instance_size` | `small` |
 | `vcpus` | `2` |
 | `memory_gb` | `2` |
-| `table_name` | `hits_13gb_sorted_counterid` |
+| `table_name` | `hits_14gb_sorted_counterid` |
 | `query_number` | `Q0` |
 | `run_number` | `1` |
 | `time_seconds` | `0.155694` |
-| `query_text` | `SELECT COUNT(*) FROM clickbench.main.hits_13gb_sorted_counterid` |
+| `query_text` | `SELECT COUNT(*) FROM clickbench.main.hits_14gb_sorted_counterid` |
 
 Each run produces 129 rows (43 queries x 3 runs). The CSV is append-friendly — run benchmarks with different instances/tables and all results accumulate in the same file.
 
