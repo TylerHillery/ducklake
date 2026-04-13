@@ -1,0 +1,16 @@
+{
+  "nodeModulesDir": "auto",
+  "tasks": {
+    "supabase": "./node_modules/.bin/supabase"
+  },
+  "imports": {
+    "@duckdb/duckdb-wasm": "/Users/tyler/code/work/duckdb-wasm/packages/duckdb-wasm/dist/duckdb-browser.mjs",
+    "apache-arrow": "npm:apache-arrow@^17.0.0",
+    "@duckdb/node-api": "npm:@duckdb/node-api@^1.5.1-r.1",
+    "supabase": "npm:supabase@^2.89.1"
+  },
+  "allowScripts": {
+    "allow": [],
+    "deny": ["npm:supabase@2.89.1"]
+  }
+}
