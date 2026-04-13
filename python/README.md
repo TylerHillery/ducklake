@@ -9,7 +9,6 @@ Performance benchmarking tool for [DuckLake](https://ducklake.select/) using Sup
 
 ```bash
 cp .env.example .env   # fill in your credentials
-mise run install       # install python deps via uv
 ```
 
 For AWS S3, also fill in `.env.aws`.
