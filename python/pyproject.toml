@@ -5,12 +5,15 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "altair>=6.0.0",
     "boto3>=1.35.0",
-    "duckdb==1.4.4",
+    "duckdb==1.5.1",
+    "pandas>=3.0.2",
     "psutil>=7.2.2",
     "python-dotenv>=1.1.0",
     "rich>=14.3.3",
     "tqdm>=4.67.3",
+    "vl-convert-python>=1.9.0.post1",
 ]
 
 [dependency-groups]

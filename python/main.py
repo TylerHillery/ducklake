@@ -3,6 +3,7 @@ import os
 import platform
 import subprocess
 import time
+from pathlib import Path
 
 import duckdb
 import psutil
@@ -55,7 +56,7 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-load_dotenv()
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 POSTGRES_HOST = os.getenv("POSTGRES_HOST")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT")
@@ -92,7 +93,7 @@ duckdb_version = duckdb.__version__
 PG = f"ducklake:postgres:dbname={POSTGRES_DATABASE} user={POSTGRES_USERNAME} host={POSTGRES_HOST} password={POSTGRES_PASSWORD} port={POSTGRES_PORT}"
 
 if args.storage == "s3":
-    load_dotenv(".env.aws", override=True)
+    load_dotenv(Path(__file__).parent.parent / ".env.aws", override=True)
     BUCKET_NAME = os.getenv("BUCKET_NAME")
     AWS_REGION = os.getenv("AWS_REGION")
     STORAGE = f"AWS S3 (s3://{BUCKET_NAME}/)"
