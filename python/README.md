@@ -1,7 +1,5 @@
 # DuckLake Benchmark
 
-> [!WARNING]
-> This repository is primarily AI-generated and is intended only for testing, debugging, and learning purposes.
 
 Performance benchmarking tool for [DuckLake](https://ducklake.select/) using Supabase (Postgres metadata + S3-compatible storage) or AWS S3.
 
