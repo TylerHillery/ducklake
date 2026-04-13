@@ -32,7 +32,7 @@ For AWS S3, also fill in `.env.aws`.
 ### Default — SELECT + file counts
 ```bash
 uv run main.py                    # Supabase storage (default)
-uv run main.py --storage s3       # AWS S3 (requires: aws sso login --profile tyler-dev)
+uv run main.py --storage s3       # AWS S3 (requires: aws sso login --profile dev)
 ```
 Prints a table with row count, scan time, file counts (data + delete files), size, and pending cleanup files.
 
@@ -87,31 +87,3 @@ uv run main.py --storage s3 --cleanup
 | `--storage s3` | AWS S3 | `ducklake_aws` | `.env.aws` (SSO) |
 
 ---
-
-## Postgres connection
-
-`.env` supports both direct and session pooler connections — comment/uncomment to switch:
-
-```bash
-# Direct connection (IPv4 addon required) — required for --cleanup and --maintenance
-POSTGRES_HOST="db.<project-ref>.supabase.red"
-
-# Session pooler (no IPv4 addon) — cleanup/maintenance will fail with large file counts
-# POSTGRES_HOST="aws-0-<region>.pooler.supabase.green"
-```
-
----
-
-## mise tasks
-
-```bash
-mise run install          # install dependencies
-mise run run              # SELECT + file count (Supabase)
-mise run run-s3           # SELECT + file count (AWS S3)
-mise run churn            # all churn (Supabase)
-mise run churn-s3         # all churn (AWS S3)
-mise run maintenance      # full maintenance pipeline (Supabase)
-mise run maintenance-s3   # full maintenance pipeline (AWS S3)
-mise run cleanup          # cleanup (Supabase)
-mise run cleanup-dry-run  # dry run cleanup (Supabase)
-```
