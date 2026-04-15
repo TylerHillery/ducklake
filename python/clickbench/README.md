@@ -60,8 +60,7 @@ GRANT pg_write_server_files TO postgres;
 DuckLake is a community extension and must be unlocked before it can be installed. These GUCs are session-local so run them in the same `psql` session:
 
 ```sql
-SET duckdb.allow_community_extensions = true;
-SET duckdb.allow_unsigned_extensions  = true;
+SELECT duckdb.install_extension('postgres');
 SELECT duckdb.install_extension('ducklake');
 ```
 
@@ -132,10 +131,10 @@ uv run python clickbench/seed.py seed --partitioned eventdate --sorted counterid
 Use `--replicate N` to insert the base data N times. The data size in the table name is computed as 13 * N.
 
 ```bash
-# 2x replication → hits_26gb
+# 2x replication → hits_28gb
 uv run python clickbench/seed.py seed --replicate 2
 
-# 5x replication + partitioned + sorted → hits_65gb_partitioned_eventdate_sorted_counterid
+# 5x replication + partitioned + sorted → hits_70gb_partitioned_eventdate_sorted_counterid
 uv run python clickbench/seed.py seed --replicate 5 --partitioned eventdate --sorted counterid
 ```
 
@@ -161,19 +160,57 @@ The seed is **idempotent** — re-running skips tables that already have data.
 
 ## Step 4 — Run the benchmark
 
-### Quick run (JSON output)
+The official ClickBench methodology runs all queries on the same machine as the database, client latency is effectively zero. Running `benchmark.py` from your laptop adds round-trip network latency to every query.
+
+### Recommended: run on the database host
+
+**1. Copy `run.sh` and `queries.sql` to the host**
 
 ```bash
-# Default: runs against hits_14gb
-cd clickbench && ./benchmark.sh
-
-# Specific table:
-TABLE_NAME=hits_14gb_sorted_counterid ./benchmark.sh
+tar czf - -C clickbench run.sh queries.sql | \
+  ssh <db-host> 'mkdir -p ~/clickbench && tar xzf - -C ~/clickbench'
 ```
 
-Prints results as JSON arrays (one per query), raw output saved to `log.txt`.
+**2. Run on the host** (timings measured locally, no client latency)
 
-### Full run with CSV results
+```bash
+ssh <db-host>
+```
+
+```bash
+TABLE_NAME=hits_14gb \
+PG_URL="postgresql://<user>@<host>/<db>" \
+ATTACH_USER=<user>\
+ATTACH_DB=<db> \
+ATTACH_PASSWORD="<password>" \
+BUCKET_NAME=<your-bucket> \
+bash ~/clickbench/run.sh > ~/run.log 2>&1
+```
+
+Watch progress in a second terminal: `tail -f ~/run.log`
+
+**3. Pull the log back**
+
+```bash
+ssh <db-host> 'cat ~/run.log' > clickbench/results/run.log
+```
+
+**4. Parse locally**
+
+```bash
+uv run python clickbench/benchmark.py \
+  --instance large \
+  --table hits_14gb \
+  --log clickbench/results/run.log
+```
+
+The `--log` flag skips running `run.sh` and parses the pre-captured output directly.
+
+---
+
+### Alternative: run locally
+
+If you don't have SSH access to the host, run locally. Timings will include client round-trip latency.
 
 ```bash
 uv run python clickbench/benchmark.py --instance small --table hits_14gb
@@ -181,7 +218,11 @@ uv run python clickbench/benchmark.py --instance small --table hits_14gb_sorted_
 uv run python clickbench/benchmark.py --instance 4xl --table hits_26gb_partitioned_eventdate
 ```
 
-Results are appended to `results/clickbench_results.csv` with columns:
+---
+
+### Results
+
+Results are appended to `results/clickbench_results.csv`:
 
 | Column | Example |
 |---|---|
@@ -196,7 +237,7 @@ Results are appended to `results/clickbench_results.csv` with columns:
 | `time_seconds` | `0.155694` |
 | `query_text` | `SELECT COUNT(*) FROM clickbench.main.hits_14gb_sorted_counterid` |
 
-Each run produces 129 rows (43 queries x 3 runs). The CSV is append-friendly — run benchmarks with different instances/tables and all results accumulate in the same file.
+Each run produces 129 rows (43 queries × 3 runs). The CSV is append-friendly — run benchmarks with different instances/tables and all results accumulate in the same file.
 
 ---
 
@@ -228,11 +269,9 @@ uv run python clickbench/seed.py teardown
 
 **Cold vs. hot runs** — Because we can't restart Supabase's managed Postgres between queries, this is a *lukewarm cold run* in ClickBench's terminology (OS page cache is not cleared either). Results should be tagged `lukewarm-cold-run` if submitted to the ClickBench repo.
 
-**Query execution path** — Queries use `duckdb.raw_query($$...$$)` which executes inside DuckDB and discards the result rows (returns void). This measures full execution time without requiring Postgres-typed column declarations.
-
 **DuckLake naming** — The DuckLake catalog is attached as `clickbench`, metadata lives in the `clickbench_ducklake` Postgres schema, and data files are at `s3://<BUCKET>/clickbench/ducklake/`.
 
-**pg_duckdb memory limit** — pg_duckdb defaults to 4 GB regardless of instance RAM. `benchmark.py` automatically sets `duckdb.memory_limit` to 75% of the instance's RAM. When running `run.sh` directly, pass `MEMORY_LIMIT_MB=0` to let DuckDB auto-detect (80% of RAM).
+**pg_duckdb memory limit** — pg_duckdb defaults to 4 GB regardless of instance RAM. `benchmark.py` prompts you to set `duckdb.memory_limit` to 75% of the instance's RAM.
 
 ### Test matrix
 

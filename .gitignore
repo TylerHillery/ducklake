@@ -7,3 +7,4 @@
 node_modules/
 python/clickbench/results/
 python/clickbench/hits.parquet
+*.pyc

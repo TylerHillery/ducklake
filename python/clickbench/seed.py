@@ -14,20 +14,17 @@ Run from the repo root:
 
 import argparse
 import os
-import sys
 import time
 from pathlib import Path
 
 import boto3
 import duckdb
-from boto3.s3.transfer import TransferConfig
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from rich import box
 from rich.console import Console
 from rich.table import Table
-from tqdm import tqdm
 
 # ---------------------------------------------------------------------------
 # Environment
@@ -54,6 +51,7 @@ DUCKLAKE_DATA_PATH = f"s3://{BUCKET_NAME}/clickbench/ducklake/"
 DUCKLAKE_ALIAS = "clickbench"
 METADATA_SCHEMA = "clickbench_ducklake"
 LOCAL_PARQUET = Path(__file__).parent / "hits.parquet"
+REMOTE_PARQUET = "https://datasets.clickhouse.com/hits_compatible/athena/hits.parquet"
 BASE_SIZE_GB = 14
 BASE_TABLE = "hits_14gb"
 
@@ -110,41 +108,61 @@ def parquet_uploaded(s3) -> bool:
         raise
 
 
-def upload_parquet(s3) -> None:
+def upload_parquet(_s3) -> None:
+    """Read local hits.parquet, convert timestamp columns, write single file to S3."""
     if not LOCAL_PARQUET.exists():
         console.print(f"[red]Error:[/red] {LOCAL_PARQUET} not found.")
         console.print("Download it first:")
         console.print(
             "  wget --continue --progress=dot:giga "
-            "https://datasets.clickhouse.com/hits_compatible/athena/hits.parquet"
+            "https://datasets.clickhouse.com/hits_compatible/athena/hits.parquet "
+            f"-O {LOCAL_PARQUET}"
         )
-        sys.exit(1)
+        raise SystemExit(1)
 
     file_size = LOCAL_PARQUET.stat().st_size
     console.print(
-        f"Uploading [bold]{LOCAL_PARQUET.name}[/bold] "
+        f"Converting + uploading [bold]{LOCAL_PARQUET.name}[/bold] "
         f"({file_size / 1e9:.1f} GB) → {S3_RAW_PATH}"
     )
-
-    transfer_cfg = TransferConfig(
-        multipart_threshold=100 * 1024 * 1024,
-        multipart_chunksize=100 * 1024 * 1024,
+    console.print(
+        "  [dim]EventDate → DATE, EventTime/ClientEventTime/LocalEventTime → TIMESTAMP[/dim]"
     )
-    with tqdm(
-        total=file_size,
-        unit="B",
-        unit_scale=True,
-        unit_divisor=1024,
-        desc="  uploading",
-    ) as bar:
-        s3.upload_file(
-            str(LOCAL_PARQUET),
-            BUCKET_NAME,
-            RAW_KEY,
-            Config=transfer_cfg,
-            Callback=lambda n: bar.update(n),
-        )
-    console.print("[green]Upload complete.[/green]")
+    console.print("  [dim](this will take a while)[/dim]")
+
+    with duckdb.connect() as conn:
+        conn.execute("INSTALL httpfs; LOAD httpfs;")
+        conn.execute(f"""
+            CREATE SECRET supabase_storage (
+                TYPE S3,
+                KEY_ID '{AWS_ACCESS_KEY_ID}',
+                SECRET '{AWS_SECRET_ACCESS_KEY}',
+                ENDPOINT '{ENDPOINT_URL}',
+                REGION '{AWS_REGION}',
+                URL_STYLE 'path',
+                USE_SSL true,
+                SCOPE 's3://{BUCKET_NAME}'
+            )
+        """)
+        # Supabase Storage sits behind Cloudflare with a 100s origin timeout.
+        # Single-threaded upload avoids concurrent-part 502s on large files.
+        conn.execute("SET s3_uploader_max_filesize='100gb';")
+        conn.execute("SET s3_uploader_thread_limit=1;")
+
+        # Writing to a specific .parquet path (not a directory) produces a single file.
+        conn.execute(f"""
+            COPY (
+                SELECT * REPLACE (
+                    (DATE '1970-01-01' + EventDate::INTEGER) AS EventDate,
+                    to_timestamp(EventTime)       AS EventTime,
+                    to_timestamp(ClientEventTime) AS ClientEventTime,
+                    to_timestamp(LocalEventTime)  AS LocalEventTime
+                )
+                FROM read_parquet({str(LOCAL_PARQUET)!r}, binary_as_string => true)
+            ) TO {S3_RAW_PATH!r} (FORMAT PARQUET)
+        """)
+
+    console.print("[green]✓[/green] Upload complete.")
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +200,7 @@ def setup_fdw() -> None:
         console.print("[green]✓[/green] Foreign server ready")
 
         # User mappings for the three roles that may run pg_duckdb queries
-        for role in ("postgres", "service_role"):
+        for role in ("postgres", "service_role", "supabase_admin"):
             conn.execute(f"""
                 CALL postgres_execute('pg', $$
                     CREATE USER MAPPING IF NOT EXISTS FOR {role}
@@ -460,7 +478,7 @@ def teardown() -> None:
     console.rule("[bold red]ClickBench Teardown[/bold red]")
 
     # 1. Delete all objects under the DuckLake data prefix in S3
-    prefix = f"clickbench/ducklake/"
+    prefix = "clickbench/ducklake/"
     s3 = _s3_client()
     paginator = s3.get_paginator("list_objects_v2")
     pages = paginator.paginate(Bucket=BUCKET_NAME, Prefix=prefix)
@@ -537,8 +555,6 @@ def main() -> None:
 
     maint_p = sub.add_parser("maintenance", help="Run maintenance pipeline on a table")
     _add_variant_args(maint_p)
-
-    tear_p = sub.add_parser("teardown", help="Drop all DuckLake data and metadata")
 
     args = parser.parse_args()
     # Default to seed when no subcommand given

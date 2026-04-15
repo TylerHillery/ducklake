@@ -159,41 +159,84 @@ def main() -> None:
     )
     parser.add_argument(
         "--provider",
-        default="supabase_ducklake",
-        help="Provider tag for filtering in charts (default: supabase_ducklake)",
+        default="supabase",
+        help="Provider tag for filtering in charts (default: supabase)",
     )
     parser.add_argument(
         "--output",
         default=str(SCRIPT_DIR / "results"),
         help="Output directory for CSV (default: clickbench/results/)",
     )
+    parser.add_argument(
+        "--log",
+        default=None,
+        metavar="FILE",
+        help=(
+            "Parse a pre-captured run.sh log instead of running it locally. "
+            "Useful when you ran run.sh over SSH on the database host to eliminate "
+            "client network latency from the timings."
+        ),
+    )
     args = parser.parse_args()
 
     specs = INSTANCE_SPECS[args.instance]
-    benchmark_id = f"{args.instance}__{args.table}"
+    benchmark_id = f"Supabase pg_duckdb (ducklake {args.instance})"
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     queries = _load_queries()
 
     memory_limit_mb = int(specs["memory_gb"] * 1024 * 0.75)
 
     print(f"Benchmark: {benchmark_id}")
-    print(f"Instance:  {args.instance} ({specs['vcpus']} vCPUs, {specs['memory_gb']} GB RAM, ARM)")
+    print(
+        f"Instance:  {args.instance} ({specs['vcpus']} vCPUs, {specs['memory_gb']} GB RAM, ARM)"
+    )
     print(f"Table:     {args.table}")
     print(f"Queries:   {len(queries)}")
     print()
-    print("─" * 60)
-    print("Before continuing, SSH in and run as superuser:")
-    print()
-    print(f"  ALTER SYSTEM SET duckdb.memory_limit = '{memory_limit_mb}MB';")
-    print(f"  SELECT pg_reload_conf();")
-    print()
-    input("Press Enter when done… ")
-    print("─" * 60)
-    print()
 
-    # Run the benchmark
-    print("Running benchmark via run.sh …\n")
-    output = _run_benchmark(args.table, len(queries))
+    if args.log:
+        # ── Remote-log mode ──────────────────────────────────────────────────
+        # The user ran run.sh on the database host and copied the log back.
+        # Skip the interactive prompt and run.sh entirely.
+        print(f"Using pre-captured log: {args.log}")
+        output = Path(args.log).read_text()
+    else:
+        # ── Local mode ───────────────────────────────────────────────────────
+        print("─" * 60)
+        print("Before continuing, SSH in and run as superuser:")
+        print()
+        print(f"  ALTER SYSTEM SET duckdb.memory_limit = '{memory_limit_mb}MB';")
+        print("  SELECT pg_reload_conf();")
+        print()
+        print("To eliminate client network latency, run on the DB host instead.")
+        print("See python/notes/SSH.md for setup. Once configured:")
+        print()
+        print("  # Push SSH key (valid 60s), then:")
+        print("  tar czf - -C clickbench run.sh queries.sql | \\")
+        print(
+            "    ssh supabase-bench 'mkdir -p ~/clickbench && tar xzf - -C ~/clickbench'"
+        )
+        print()
+        print("  ssh supabase-bench \\")
+        print(f"    'TABLE_NAME={args.table} \\")
+        print("     PG_URL=postgresql://supabase_admin@localhost/postgres \\")
+        print(
+            '     ATTACH_USER=supabase_admin ATTACH_DB=postgres ATTACH_PASSWORD="" \\'
+        )
+        print("     BUCKET_NAME=<your-bucket> \\")
+        print("     bash ~/clickbench/run.sh > ~/run.log 2>&1'")
+        print()
+        print("  ssh supabase-bench 'cat ~/run.log' > clickbench/results/run.log")
+        print()
+        print(
+            f"  uv run python clickbench/benchmark.py --instance {args.instance} --table {args.table} --log clickbench/results/run.log"
+        )
+        print()
+        input("Press Enter when done… ")
+        print("─" * 60)
+        print()
+        print("Running benchmark via run.sh …\n")
+        output = _run_benchmark(args.table, len(queries))
 
     # Parse timings
     timings = _parse_timings(output)
